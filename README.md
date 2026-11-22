@@ -30,6 +30,17 @@ Ollama) · ChromaDB · SQLite · plain HTML/CSS/JS
 - **Mobile-first web app** for cheap phones: big buttons, PDF download, listen to the plan, resume later.
 - **Privacy:** Aadhaar, PAN, bank and phone numbers are masked before anything is stored or sent.
 
+## Deployment
+
+Deploy directly to **Render** with one click:
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/ashiii17/Agentic-AI)
+
+During setup on Render:
+1. Provide your **`GROQ_API_KEY`** (get a free key at [console.groq.com/keys](https://console.groq.com/keys)).
+2. Click **Create Web Service**.
+3. Render automatically installs dependencies, embeds the scheme documents, and runs the FastAPI server.
+
 ## Quick start
 
 ```bash

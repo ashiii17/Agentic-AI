@@ -1,0 +1,33 @@
+services:
+  - type: web
+    name: agentic-ai
+    runtime: python
+    buildCommand: "pip install --upgrade pip && pip install torch --index-url https://download.pytorch.org/whl/cpu && pip install -r requirements.txt && python scripts/ingest_docs.py"
+    startCommand: "uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: LLM_PROVIDER
+        value: groq
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: openai/gpt-oss-120b
+      - key: LLM_TEMPERATURE
+        value: "0.3"
+      - key: LLM_MAX_TOKENS
+        value: "2048"
+      - key: PLAN_MAX_TOKENS
+        value: "4096"
+      - key: DEFAULT_PLAN_VERSION
+        value: plan_v5
+      - key: TRANSLATE_MODE
+        value: auto
+      - key: SESSION_STORE
+        value: sqlite
+      - key: DB_PATH
+        value: data/app.db
+      - key: CHROMA_DIR
+        value: chroma_db
+      - key: EMBEDDING_MODEL
+        value: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
