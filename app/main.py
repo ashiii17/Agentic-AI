@@ -1,0 +1,157 @@
+"""FastAPI backend - Phase 1 (LLM test) + Phase 2 (intake chat) + Phase 3 (RAG + calculator)
++ Phase 4 (plan generation) + Phase 5 (web app at /).
+
+Run:  uvicorn app.main:app --reload
+Docs: http://127.0.0.1:8000/docs   (try the endpoints from your browser)
+"""
+import logging
+import time
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from langchain_core.messages import HumanMessage, SystemMessage
+from pydantic import BaseModel, Field
+
+from app.config import settings
+from app.db import init_db
+from app.llm import LLMConfigError, get_llm, load_prompt
+from app.routes.advisor import router as advisor_router
+from app.routes.checklist import router as checklist_router
+from app.routes.frontend import STATIC_DIR
+from app.routes.frontend import router as frontend_router
+from app.routes.intake import router as intake_router
+from app.routes.plan import router as plan_router
+from app.routes.tools import router as tools_router
+
+
+def startup_summary() -> list[str]:
+    """Friendly startup log: what this server is configured to use."""
+    from app.rag import index_info
+
+    index = index_info()
+    rag_status = f"{index['chunks']} chunks, {len(index['sources'])} schemes" if index["built"] else \
+        "not built (run: python scripts/ingest_docs.py)"
+    return [
+        f"LLM provider : {settings.LLM_PROVIDER} ({settings.model_name})",
+        f"Scheme index : {rag_status}",
+        f"Database     : {settings.DB_PATH} ({settings.SESSION_STORE} sessions)",
+        f"Plan prompt  : {settings.DEFAULT_PLAN_VERSION} (default) | translate mode: {settings.TRANSLATE_MODE}",
+    ]
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Phase 6: create the SQLite tables (data/app.db) when the server starts. Safe every time.
+    Phase 7: print a short summary of the configuration."""
+    init_db()
+    log = logging.getLogger("uvicorn.error")
+    log.info("Business Starter is starting")
+    for line in startup_summary():
+        log.info("  %s", line)
+    yield
+
+
+app = FastAPI(
+    lifespan=lifespan,
+    title="AI Business Starter Agent",
+    description="Agentic AI that helps aspiring entrepreneurs plan and launch a small business.",
+    version="0.5.0",
+)
+
+# Allow the frontend (Phase 5) to call this API from the browser.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Phase 2: intake chat endpoints (/api/session, /api/chat ...) live in app/routes/intake.py
+app.include_router(intake_router)
+# Phase 3: scheme search + calculator endpoints (/api/rag/..., /api/calculate) in app/routes/tools.py
+app.include_router(tools_router)
+# Phase 4: business plan endpoints (/api/plan...) in app/routes/plan.py
+app.include_router(plan_router)
+# Phase 6: launch checklist on the server (/api/checklist/...) in app/routes/checklist.py
+app.include_router(checklist_router)
+# Phase 6: Q&A advisor + next-step guide (/api/ask, /api/guide) in app/routes/advisor.py
+app.include_router(advisor_router)
+# Phase 5: the web app (GET /, /compare.html, /api/samples) + its CSS/JS files under /static
+app.include_router(frontend_router)
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+# ---------- Request / response models ----------
+
+class BusinessInput(BaseModel):
+    business_idea: str = Field(..., examples=["Healthy meal service for fitness enthusiasts"])
+    budget: str = Field(..., examples=["Rs 20,000"])
+    location: str = Field(..., examples=["Ghaziabad"])
+    skills: str = Field(..., examples=["Basic cooking"])
+    target_customers: str = Field(
+        ..., examples=["Gym-goers and fitness enthusiasts seeking high-protein meals and diet plans"]
+    )
+    prompt_version: str = Field("baseline_v1", description="File name in app/prompts/ (without .txt)")
+
+
+class LLMResponse(BaseModel):
+    output: str
+    provider: str
+    model: str
+    prompt_version: str
+    latency_seconds: float
+
+
+# ---------- Helpers ----------
+
+def format_user_input(data: BusinessInput) -> str:
+    return (
+        f"Business idea: {data.business_idea}\n"
+        f"Budget: {data.budget}\n"
+        f"Location: {data.location}\n"
+        f"Skills: {data.skills}\n"
+        f"Target customers: {data.target_customers}"
+    )
+
+
+def run_llm(system_prompt: str, user_message: str) -> str:
+    try:
+        llm = get_llm()
+        result = llm.invoke([SystemMessage(content=system_prompt), HumanMessage(content=user_message)])
+    except LLMConfigError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:  # network errors, bad model name, Ollama not running, rate limits...
+        raise HTTPException(
+            status_code=502,
+            detail=f"LLM call failed ({settings.LLM_PROVIDER}/{settings.model_name}): {e}",
+        )
+    return result.content if isinstance(result.content, str) else str(result.content)
+
+
+# ---------- Endpoints ----------
+
+@app.get("/health")
+def health():
+    """Quick check that the server is running and which LLM it is configured for."""
+    return {"status": "ok", "provider": settings.LLM_PROVIDER, "model": settings.model_name}
+
+
+@app.post("/api/test-prompt", response_model=LLMResponse)
+def test_prompt(data: BusinessInput):
+    """Phase 1 test: send a business profile through a prompt and return the LLM's plan."""
+    try:
+        system_prompt = load_prompt(data.prompt_version)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    start = time.perf_counter()
+    output = run_llm(system_prompt, format_user_input(data))
+    return LLMResponse(
+        output=output,
+        provider=settings.LLM_PROVIDER,
+        model=settings.model_name,
+        prompt_version=data.prompt_version,
+        latency_seconds=round(time.perf_counter() - start, 2),
+    )
